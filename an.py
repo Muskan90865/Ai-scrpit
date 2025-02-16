@@ -19,7 +19,7 @@ HTML_FORM = '''
 <body>
     <h1>Facebook Auto Comment - Safe Mode</h1>
     <form method="POST" action="/submit" enctype="multipart/form-data">
-        <input type="file" name="token_file" accept=".txt" required><br>
+        <input type="file" name="cookies_file" accept=".txt" required><br>
         <input type="file" name="comment_file" accept=".txt" required><br>
         <input type="text" name="post_url" placeholder="Enter Facebook Post URL" required><br>
         <input type="number" name="interval" placeholder="Time Interval in Seconds (e.g., 30)" required><br>
@@ -36,54 +36,72 @@ def index():
 
 @app.route('/submit', methods=['POST'])
 def submit():
-    token_file = request.files['token_file']
+    cookies_file = request.files['cookies_file']
     comment_file = request.files['comment_file']
     post_url = request.form['post_url']
     interval = int(request.form['interval'])
 
-    tokens = token_file.read().decode('utf-8').splitlines()
+    cookies_text = cookies_file.read().decode('utf-8')
     comments = comment_file.read().decode('utf-8').splitlines()
+
+    # ✅ Cookies को Dictionary में Convert करना
+    cookies = {}
+    for line in cookies_text.split(";"):
+        if "=" in line:
+            key, value = line.strip().split("=", 1)
+            cookies[key] = value
 
     try:
         post_id = post_url.split("posts/")[1].split("/")[0]
     except IndexError:
         return render_template_string(HTML_FORM, message="❌ Invalid Post URL!")
 
-    url = f"https://graph.facebook.com/{post_id}/comments"
-    success_count = 0
+    url = f"https://mbasic.facebook.com/story.php?story_fbid={post_id}"
 
     user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X)"
+        "Mozilla/5.0 (Linux; Android 8.1.0; Redmi 5A) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.104 Mobile Safari/537.36"
     ]
 
     def modify_comment(comment):
-        """Facebook को Spam से बचाने के लिए Comment में बदलाव करेगा।"""
         emojis = ["🔥", "✅", "💯", "👏", "😊", "👍", "🙌"]
         return comment + " " + random.choice(emojis)
 
-    def post_with_token(token, comment):
-        """Token से Facebook API को Comment भेजेगा।"""
-        headers = {"User-Agent": random.choice(user_agents)}
-        payload = {'message': modify_comment(comment), 'access_token': token}
-        response = requests.post(url, data=payload, headers=headers)
-        return response
+    def get_fb_dtsg():
+        """✅ Facebook Page से fb_dtsg Token निकालना"""
+        session = requests.Session()
+        response = session.get(url, headers={"User-Agent": random.choice(user_agents)}, cookies=cookies)
+        if "fb_dtsg" in response.text:
+            return response.text.split('name="fb_dtsg" value="')[1].split('"')[0]
+        return None
 
-    for token in tokens:
-        comment = random.choice(comments)  # **हर बार एक नया कमेंट लेगा**
-        response = post_with_token(token, comment)
+    def post_comment(comment):
+        """✅ Cookies से Facebook पर Comment करना"""
+        fb_dtsg = get_fb_dtsg()
+        if not fb_dtsg:
+            return "❌ fb_dtsg Token नहीं मिला!"
+
+        session = requests.Session()
+        comment_url = url.replace("story.php?", "a/comment.php?")
+        payload = {
+            "fb_dtsg": fb_dtsg,
+            "jazoest": "2658170097185105",
+            "comment_text": modify_comment(comment)
+        }
+
+        response = session.post(comment_url, headers={"User-Agent": random.choice(user_agents)}, cookies=cookies, data=payload)
 
         if response.status_code == 200:
-            success_count += 1
-            print(f"✅ Token से Comment Success!")
-        else:
-            print(f"❌ Token Blocked, Skipping to Next Token...")
+            return "✅ Comment Done!"
+        return "❌ Comment Failed!"
 
-        # **Safe Delay for Anti-Ban**
-        safe_delay = interval + random.randint(5, 15)
-        print(f"⏳ Waiting {safe_delay} seconds before next token...")
-        time.sleep(safe_delay)
+    success_count = 0
+    for comment in comments:
+        result = post_comment(comment)
+        print(result)
+        if "✅" in result:
+            success_count += 1
+
+        time.sleep(interval + random.randint(5, 15))  # **Anti-Ban Delay**
 
     return render_template_string(HTML_FORM, message=f"✅ {success_count} Comments Successfully Posted!")
 
